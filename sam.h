@@ -7,6 +7,9 @@
 // #include <torchvision/vision.h>
 #include <torch/script.h>
 #include "sam_utils.h"
+#include <iostream>
+#include <fstream>
+
 
 using namespace torch::indexing;
 
@@ -407,10 +410,17 @@ int SamPromptEncoderAndMaskDecoder::prepareInput(int x, int y, at::Tensor image_
     auto input_point = at::tensor({x, y}, at::kFloat).reshape({-1,2});
     auto input_label = at::tensor({1}, at::kFloat);
 
+    std::cout << "input_point: " << input_point << std::endl;
+    std::cout << "input_label: " << input_label << std::endl;
+
     auto trt_coord = at::concatenate({input_point, at::tensor({0, 0}, at::kFloat).unsqueeze(0)}, 0).unsqueeze(0);
     auto trt_label = at::concatenate({input_label, at::tensor({-1}, at::kFloat)}, 0).unsqueeze(0);
     // auto trt_coord = at::concatenate({input_point, at::tensor({x-100, y-100, x+100, y+100}, at::kFloat).reshape({-1,2})}, 0).unsqueeze(0);
     // auto trt_label = at::concatenate({input_label, at::tensor({2,3}, at::kFloat)}, 0).unsqueeze(0);
+
+    std::cout << "trt_coord: " << trt_coord << std::endl;
+    std::cout << "trt_label: " << trt_label << std::endl;
+
     trt_coord = transf.apply_coords(trt_coord, {frame.rows, frame.cols});
     // std::cout << "trt_coord " << trt_coord.sizes() << std::endl;
     auto trt_mask_input = at::zeros({1, 1, 256, 256}, at::kFloat);
@@ -448,81 +458,27 @@ int SamPromptEncoderAndMaskDecoder::prepareInput(int x, int y, at::Tensor image_
     return 0;
 }
 
-int SamPromptEncoderAndMaskDecoder::prepareInput(int x, int y, int x1, int y1, int x2, int y2, at::Tensor image_embeddings)
-{
-    // at::Tensor image_embeddings;
-
-    // torch::load(image_embeddings, "preds.pt");
-    // std::cout << image_embeddings.sizes() << std::endl;
-    int image_size = 1024;
-    ResizeLongestSide transf(image_size);
-
-    auto input_point = at::tensor({x, y}, at::kFloat).reshape({-1,2});
-    auto input_label = at::tensor({1}, at::kFloat);
-
-    auto trt_coord = at::concatenate({input_point, at::tensor({x1, y1, x2, y2}, at::kFloat).reshape({-1,2})}, 0).unsqueeze(0);
-    auto trt_label = at::concatenate({input_label, at::tensor({2,3}, at::kFloat)}, 0).unsqueeze(0);
-    trt_coord = transf.apply_coords(trt_coord, {frame.rows, frame.cols});
-    // std::cout << "trt_coord " << trt_coord.sizes() << std::endl;
-    auto trt_mask_input = at::zeros({1, 1, 256, 256}, at::kFloat);
-    auto trt_has_mask_input = at::zeros(1, at::kFloat);
-
-    context->setBindingDimensions(1, nvinfer1::Dims3(trt_coord.size(0), trt_coord.size(1), trt_coord.size(2)));
-    // set input dims whichs name "point_label "
-    context->setBindingDimensions(2, nvinfer1::Dims2(trt_coord.size(0), trt_coord.size(1)));
-    
-    for (int i = 0; i < mEngine->getNbBindings(); i++)
-    {
-        // auto dims = mEngine->getBindingDimensions(i);
-        auto tensor_name = mEngine->getBindingName(i);
-        std::cout << "tensor_name: " << tensor_name << std::endl;
-        auto dims = context->getBindingDimensions(i);
-        dims2str(dims);
-        nvinfer1::DataType type = mEngine->getBindingDataType(i);
-        index2srt(type);
-        auto vol = std::accumulate(dims.d, dims.d + dims.nbDims, int64_t{1}, std::multiplies<int64_t>{});
-
-        mInOut[tensor_name]->resize(dims);
-    }
-
-    CHECK(mInOut["image_embeddings"]->host2device((void *)(image_embeddings.data_ptr<float>()), true, stream));
-    CHECK(cudaStreamSynchronize(stream));
-    CHECK(mInOut["point_coords"]->host2device((void *)(trt_coord.data_ptr<float>()), true, stream));
-    CHECK(cudaStreamSynchronize(stream));
-    CHECK(mInOut["point_labels"]->host2device((void *)(trt_label.data_ptr<float>()), true, stream));
-    CHECK(cudaStreamSynchronize(stream));
-    CHECK(mInOut["mask_input"]->host2device((void *)(trt_mask_input.data_ptr<float>()), true, stream));
-    CHECK(cudaStreamSynchronize(stream));
-    CHECK(mInOut["has_mask_input"]->host2device((void *)(trt_has_mask_input.data_ptr<float>()), true, stream));
-    CHECK(cudaStreamSynchronize(stream));
-    return 0;
-}
-
 int SamPromptEncoderAndMaskDecoder::prepareInput(std::vector<int> mult_pts, at::Tensor image_embeddings)
 {
-    // at::Tensor image_embeddings;
-
-    // torch::load(image_embeddings, "preds.pt");
-    // std::cout << image_embeddings.sizes() << std::endl;
     int image_size = 1024;
     ResizeLongestSide transf(image_size);
 
-    auto input_point = at::tensor(mult_pts, at::kFloat).reshape({-1,2});
+    auto input_point = at::tensor(mult_pts, at::kFloat).reshape({ -1,2 });
     std::cout << input_point << std::endl;
-    auto input_label = at::ones({int(mult_pts.size() / 2)}, at::kFloat);
+    auto input_label = at::ones({ int(mult_pts.size() / 2) }, at::kFloat);
     std::cout << input_label << std::endl;
 
-    auto trt_coord = at::concatenate({input_point, at::tensor({0, 0}, at::kFloat).unsqueeze(0)}, 0).unsqueeze(0);
-    auto trt_label = at::concatenate({input_label, at::tensor({-1}, at::kFloat)}, 0).unsqueeze(0);
-    trt_coord = transf.apply_coords(trt_coord, {frame.rows, frame.cols});
-    // std::cout << "trt_coord " << trt_coord.sizes() << std::endl;
-    auto trt_mask_input = at::zeros({1, 1, 256, 256}, at::kFloat);
+    auto trt_coord = at::concatenate({ input_point, at::tensor({0, 0}, at::kFloat).unsqueeze(0) }, 0).unsqueeze(0);
+    auto trt_label = at::concatenate({ input_label, at::tensor({-1}, at::kFloat) }, 0).unsqueeze(0);
+    trt_coord = transf.apply_coords(trt_coord, { frame.rows, frame.cols });
+    std::cout << "trt_coord " << trt_coord.sizes() << std::endl;
+    auto trt_mask_input = at::zeros({ 1, 1, 256, 256 }, at::kFloat);
     auto trt_has_mask_input = at::zeros(1, at::kFloat);
 
     context->setBindingDimensions(1, nvinfer1::Dims3(trt_coord.size(0), trt_coord.size(1), trt_coord.size(2)));
     // set input dims whichs name "point_label "
     context->setBindingDimensions(2, nvinfer1::Dims2(trt_coord.size(0), trt_coord.size(1)));
-    
+
     for (int i = 0; i < mEngine->getNbBindings(); i++)
     {
         // auto dims = mEngine->getBindingDimensions(i);
@@ -532,20 +488,20 @@ int SamPromptEncoderAndMaskDecoder::prepareInput(std::vector<int> mult_pts, at::
         dims2str(dims);
         nvinfer1::DataType type = mEngine->getBindingDataType(i);
         index2srt(type);
-        auto vol = std::accumulate(dims.d, dims.d + dims.nbDims, int64_t{1}, std::multiplies<int64_t>{});
+        auto vol = std::accumulate(dims.d, dims.d + dims.nbDims, int64_t{ 1 }, std::multiplies<int64_t>{});
 
         mInOut[tensor_name]->resize(dims);
     }
 
-    CHECK(mInOut["image_embeddings"]->host2device((void *)(image_embeddings.data_ptr<float>()), true, stream));
+    CHECK(mInOut["image_embeddings"]->host2device((void*)(image_embeddings.data_ptr<float>()), true, stream));
     CHECK(cudaStreamSynchronize(stream));
-    CHECK(mInOut["point_coords"]->host2device((void *)(trt_coord.data_ptr<float>()), true, stream));
+    CHECK(mInOut["point_coords"]->host2device((void*)(trt_coord.data_ptr<float>()), true, stream));
     CHECK(cudaStreamSynchronize(stream));
-    CHECK(mInOut["point_labels"]->host2device((void *)(trt_label.data_ptr<float>()), true, stream));
+    CHECK(mInOut["point_labels"]->host2device((void*)(trt_label.data_ptr<float>()), true, stream));
     CHECK(cudaStreamSynchronize(stream));
-    CHECK(mInOut["mask_input"]->host2device((void *)(trt_mask_input.data_ptr<float>()), true, stream));
+    CHECK(mInOut["mask_input"]->host2device((void*)(trt_mask_input.data_ptr<float>()), true, stream));
     CHECK(cudaStreamSynchronize(stream));
-    CHECK(mInOut["has_mask_input"]->host2device((void *)(trt_has_mask_input.data_ptr<float>()), true, stream));
+    CHECK(mInOut["has_mask_input"]->host2device((void*)(trt_has_mask_input.data_ptr<float>()), true, stream));
     CHECK(cudaStreamSynchronize(stream));
     return 0;
 }
@@ -555,6 +511,26 @@ bool SamPromptEncoderAndMaskDecoder::infer()
     CHECK(cudaEventRecord(start, stream));
     auto ret = context->enqueueV2(mDeviceBindings.data(), stream, nullptr);
     return ret;
+}
+
+void writeTensorToFile(const at::Tensor& tensor, const std::string& filename) {
+    // Convert tensor to contiguous form
+    at::Tensor contiguousTensor = tensor.contiguous();
+
+    // Open the file in binary mode
+    std::ofstream outFile(filename, std::ios::binary);
+
+    // Check if the file is open
+    if (!outFile.is_open()) {
+        std::cerr << "Error: Could not open file " << filename << std::endl;
+        return;
+    }
+
+    // Write the tensor data to the file
+    outFile.write(reinterpret_cast<const char*>(contiguousTensor.data_ptr<float>()), contiguousTensor.numel() * sizeof(float));
+
+    // Close the file
+    outFile.close();
 }
 
 int SamPromptEncoderAndMaskDecoder::verifyOutput()
@@ -571,20 +547,33 @@ int SamPromptEncoderAndMaskDecoder::verifyOutput()
     at::Tensor masks;
     masks = at::zeros({dim0.d[0], dim0.d[1], dim0.d[2], dim0.d[3]}, at::kFloat);
     mInOut["masks"]->device2host((void *)(masks.data_ptr<float>()), stream);
+
+    std::string filePath = "weights/masks_data.bin";
+    //at::Tensor contiguousTensor = masks.contiguous();
+    //torch::save(masks, filePath2);
+    writeTensorToFile(masks, filePath);
+
+    //std::cout << masks << std::endl;
     // Wait for the work in the stream to complete
+
     CHECK(cudaStreamSynchronize(stream));
 
     int longest_side = 1024;
-
+  
     namespace F = torch::nn::functional;
-    masks = F::interpolate(masks, F::InterpolateFuncOptions().size(std::vector<int64_t>({longest_side, longest_side})).mode(torch::kBilinear).align_corners(false));
-    // at::IntArrayRef input_image_size{frame.rows, frame.cols};
+    //    auto temp = F::InterpolateFuncOptions().size(std::vector<int64_t>({ longest_side , longest_side })).mode(torch::kBilinear).align_corners(false);
+    //auto temp = F::InterpolateFuncOptions().scale_factor(std::vector<double_t>({ 2.0 })).mode(torch::kBilinear).align_corners(false);
+    //masks = F::interpolate(masks, temp);
+    //at::IntArrayRef input_image_size{frame.rows, frame.cols};
+    masks = F::interpolate(masks,F::InterpolateFuncOptions().size(std::vector<int64_t>({ 512,512 })).mode(torch::kNearest));
     ResizeLongestSide transf(longest_side);
     auto target_size = transf.get_preprocess_shape(frame.rows, frame.cols);
     masks = masks.index({"...", Slice(None, target_size[0]), Slice(None, target_size[1])});
 
-    masks = F::interpolate(masks, F::InterpolateFuncOptions().size(std::vector<int64_t>({frame.rows, frame.cols})).mode(torch::kBilinear).align_corners(false));
-    std::cout << "masks: " << masks.sizes() << std::endl;
+   /* masks = F::interpolate(masks, F::InterpolateFuncOptions().size(std::vector<int64_t>({ frame.rows, frame.cols })).mode(torch::kNearest).align_corners(false));
+    std::cout << "masks: " << masks.sizes() << std::endl;*/
+
+
 
     at::Tensor iou_predictions;
     iou_predictions = at::zeros({dim0.d[0], dim0.d[1]}, at::kFloat);
@@ -614,17 +603,21 @@ int SamPromptEncoderAndMaskDecoder::verifyOutput()
     cv::Mat img;
     // cv::Mat frame = cv::imread("D:/projects/detections/data/truck.jpg");
     frame.convertTo(img, CV_32F, 1.0 / 255);
+    int r = img.channels();
     at::Tensor im_gpu =
         at::from_blob(img.data, {img.rows, img.cols, img.channels()})
             .permute({2, 0, 1})
             .contiguous()
+            .unsqueeze(0)
             .to(device);
-    auto results = plot_masks(masks, im_gpu, 0.5);
+    float x = 0.5;
+
+    auto results = plot_masks(masks, im_gpu, x);
     auto t_img = results.to(torch::kCPU).clamp(0, 255).to(torch::kU8);
 
     auto img_ = cv::Mat(t_img.size(0), t_img.size(1), CV_8UC3, t_img.data_ptr<uchar>());
     std::cout << "1111111111111111" << std::endl;
-    cv::cvtColor(img_, img_, cv::COLOR_RGB2BGR);
+    //cv::cvtColor(img_, img_, cv::COLOR_RGB2BGR);
     cv::imwrite("img1111.jpg",img_);
     // cv::imshow("img_", img_);
     return 0;
@@ -732,16 +725,22 @@ at::Tensor SamPromptEncoderAndMaskDecoder::plot_masks(at::Tensor masks, at::Tens
     inv_alph_masks = inv_alph_masks.cumprod(0);
     // std::cout << "inv_alph_masks: " << inv_alph_masks.sizes() << std::endl;
 
+    //image*alpha + mask(1-alpha)
     auto mcs = masks_color * inv_alph_masks;
     mcs = mcs.sum(0) * 2;
-    // std::cout << "mcs: " << mcs.sizes() << std::endl;
+    std::cout << "mcs: " << mcs.sizes() << std::endl;
     im_gpu = im_gpu.flip({0});
-    // std::cout << "im_gpu: " << im_gpu.sizes() << std::endl;
+    std::cout << "im_gpu: " << im_gpu.sizes() << std::endl;
     im_gpu = im_gpu.permute({1, 2, 0}).contiguous();
-    // std::cout << "im_gpu: " << im_gpu.sizes() << std::endl;
-    im_gpu = im_gpu * inv_alph_masks[-1] + mcs;
+    std::cout << "im_gpu: " << im_gpu.sizes() << std::endl;
+    //im_gpu = im_gpu * inv_alph_masks[-1] + mcs;
+    //im_gpu = im_gpu * inv_alph_masks.index({ "...", Slice(None, inv_alph_masks.size(2)), Slice(None, inv_alph_masks.size(3)) }) + mcs;
+    im_gpu = im_gpu * inv_alph_masks.index({ "..." }).slice(2, 0, inv_alph_masks.size(2)).slice(3, 0, inv_alph_masks.size(3)) + mcs;
+
+
     // std::cout << "im_gpu: " << im_gpu.sizes() << std::endl;
     auto im_mask = (im_gpu * 255);
     return im_mask;
 }
+
 #endif
