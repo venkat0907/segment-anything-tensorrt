@@ -1,7 +1,7 @@
 
 #include "sam.h"
 #include "export.h"
-#include "baseModel.h"
+//#include "baseModel.h"
 ///////////////////////////////////////////////////////////////////////////////
 using namespace std;
 using namespace cv;
@@ -13,65 +13,72 @@ at::Tensor image_embeddings;
 #define EMBEDDING
 #define SAMPROMPTENCODERANDMASKDECODER
 
-//std::vector<float> build_point_grid(int n_points) {
-//	std::vector<float> point_grid;
-//	for (int i = 0; i < n_points; ++i) {
-//		float x = static_cast<float>(i) / n_points;
-//		for (int j = 0; j < n_points; ++j) {
-//			float y = static_cast<float>(j) / n_points;
-//			point_grid.push_back(x);
-//			point_grid.push_back(y);
-//		}
-//	}
-//	return point_grid;
-//}
-//
-//std::vector<std::vector<float>> build_all_layer_point_grids(int n_per_side, int n_layers, int scale_per_layer) {
-//	std::vector<std::vector<float>> points_by_layer;
-//	for (int i = 0; i <= n_layers; ++i) {
-//		int n_points = n_per_side / (scale_per_layer * i + 1);
-//		auto point_grid = build_point_grid(n_points);
-//		points_by_layer.push_back(point_grid);
-//	}
-//	return points_by_layer;
-//}
+//#include <vector>
+//#include <numeric>
+//#include <algorithm>
+//#include <cmath>
 
-#include <vector>
-#include <numeric>
-#include <algorithm>
-#include <cmath>
-
-using std::vector;
-using std::iota;
-
-vector<double> build_point_grid(int n_per_side) {
-	// Calculate offset and spacing for evenly spaced points
+std::vector<std::vector<double>> build_point_grid(int n_per_side) {
+	// Generate a 1D array of points for one side
 	double offset = 1.0 / (2 * n_per_side);
-	double spacing = 1.0 / n_per_side;
+	std::vector<double> points_one_side;
+	for (int i = 0; i < n_per_side; ++i) {
+		points_one_side.push_back(offset + i * (1.0 - 2 * offset) / (n_per_side - 1));
+	}
 
-	// Generate points efficiently using iota and transform
-	vector<double> points_x(n_per_side * n_per_side);
-	iota(points_x.begin(), points_x.end(), offset);
-	transform(points_x.begin(), points_x.end(), points_x.begin(),
-		[spacing](double x) { return x * spacing; });
+	// Create a 2D grid of points using the generated array
+	std::vector<std::vector<double>> points(n_per_side, std::vector<double>(n_per_side));
 
-	// Reshape into 2D grid
-	vector<double> points(2 * n_per_side * n_per_side);
-	std::copy(points_x.begin(), points_x.end(), points.begin());
-	std::copy(points_x.begin(), points_x.end(), points.begin() + n_per_side * n_per_side);
+	for (int i = 0; i < n_per_side; ++i) {
+		for (int j = 0; j < n_per_side; ++j) {
+			points[i][j] = points_one_side[j];
+		}
+	}
 
 	return points;
 }
 
-vector<vector<double>> build_all_layer_point_grids(int n_per_side, int n_layers, int scale_per_layer) {
-	vector<vector<double>> points_by_layer;
+ //Function to build all layer point grids
+std::vector<std::vector<std::vector<double>>> build_all_layer_point_grids(
+	int n_per_side, int n_layers, int scale_per_layer
+) {
+	// Generates point grids for all crop layers
+	std::vector<std::vector<std::vector<double>>> points_by_layer;
 
 	for (int i = 0; i <= n_layers; ++i) {
-		int n_points = int(ceil(n_per_side / pow(scale_per_layer, i)));  // Ensure integer division rounds up
+		int n_points = static_cast<int>(n_per_side / std::pow(scale_per_layer, i));
 		points_by_layer.push_back(build_point_grid(n_points));
 	}
 
 	return points_by_layer;
+}
+
+std::vector<std::vector<int>> m_batch_iterator(int batch_size, const std::vector<std::vector<double>>& args) {
+	assert(!args.empty() && std::all_of(args.begin(), args.end(),
+		[&](const std::vector<double>& a) { return a.size() == args[0].size(); }),
+		"Batched iteration must have inputs of all the same size.");
+
+	int n_batches = args[0].size() / batch_size + static_cast<int>(args[0].size() % batch_size != 0);
+	std::cout << "Number of Batches: " << n_batches << std::endl;
+
+	std::vector<std::vector<int>> batches;
+
+	for (int b = 0; b < n_batches; ++b) {
+		std::vector<int> batch_args;
+
+		// Extract batch for each argument
+		for (const auto& arg : args) {
+			auto start = arg.begin() + b * batch_size;
+			auto end = arg.begin() + std::min((b + 1) * batch_size, static_cast<int>(arg.size()));
+
+			// Convert each double element to int and append to batch_args
+			batch_args.insert(batch_args.end(), start, end);
+		}
+
+		batches.push_back(batch_args);
+	}
+
+	return batches;
 }
 
 int main(int argc, char const* argv[])
@@ -82,7 +89,7 @@ int main(int argc, char const* argv[])
 	if (!f1.good())
 		export_engine_image_encoder("weights/vit_l_embedding.onnx", "weights/vit_l_embedding.engine");
 
-	ifstream f2("weights/samlorg5pts.engine");
+	ifstream f2("weights/samlorg64pts.engine");
 	if (!f2.good())
 		export_engine_prompt_encoder_and_mask_decoder("weights/samlorg.onnx", "weights/samlorg22.engine");
 
@@ -123,7 +130,7 @@ int main(int argc, char const* argv[])
 
 #ifdef SAMPROMPTENCODERANDMASKDECODER
 	{
-		const std::string modelFile = "weights/samlorg5pts.engine";
+		const std::string modelFile = "weights/samlorg64pts.engine";
 		std::cout << "into prompt encoder" << std::endl;
 		std::ifstream engineFile(modelFile.c_str(), std::ifstream::binary);
 		assert(engineFile);
@@ -149,43 +156,41 @@ int main(int argc, char const* argv[])
 		int points_per_batch = 64;
 		int points_per_side = 32;
 		int crop_n_layers = 0;
-		float crop_overlap_ratio = 512.0 / 1500.0;
+		int crop_overlap_ratio = 512 / 1500;
 
-		vector<vector<double>> point_grids = build_all_layer_point_grids(points_per_side, crop_n_layers, crop_overlap_ratio);
+		std::vector<std::vector<std::vector<double>>>point_grids = build_all_layer_point_grids(points_per_side, crop_n_layers, crop_overlap_ratio);
 
-		for (int i = 0; i < point_grids.size(); ++i) {
-			cout << "Point grid for layer " << i << ":" << endl;
-			for (const double& point : point_grids[i]) {
-				cout << point << " ";
+		int scale_x = 1800;
+		int scale_y = 1200;
+
+		std::vector<std::vector<double>> points_for_image = point_grids[0];
+
+		//// Scale each point in the grid and store in points_for_image
+		for (auto& row : points_for_image) {
+			for (size_t j = 0; j < row.size(); ++j) {
+				row[j] *= (j == 0) ? scale_x : scale_y;
 			}
-			cout << endl;
-		}
 
-		vector<int> points_scale = { frame.rows, frame.cols };  // Reverse order for ::-1
-		cout << "points_scale: ";
-		for (int value : points_scale) {
-			cout << value << " ";
-		}
-		cout << endl;
+			std::vector<std::vector<int>> batches = m_batch_iterator(points_per_batch, points_for_image);
 
-		vector<double>& points_for_image = point_grids[0];
-		for (int i = 0; i < points_for_image.size(); ++i) {
-			points_for_image[i] *= points_scale[i % 2]; // Use modulo to alternate between rows and cols
-		}
+			for (const auto& batch : batches) {
+				auto res = eng_1->prepareInput(batch, image_embeddings);
+				std::cout << "------------------prepareInput: " << res << std::endl;
 
-		cout << "points_for_image after scaling:" << endl;
-		for (const double& point : points_for_image) {
-			cout << point << " ";
-		}
-		cout << endl;
+				res = eng_1->infer();
+				std::cout << "------------------infer: " << res << std::endl;
 
-		/*std::vector<int> mult_pts = {x,y,x-5,y-5,x+5,y+5};
-		auto res = eng_1->prepareInput(mult_pts, image_embeddings);
-		std::cout << "------------------prepareInput: " << res << std::endl;
-		res = eng_1->infer();
-		std::cout << "------------------infer: " << res << std::endl;
-		eng_1->verifyOutput();
-		std::cout << "-----------------done" << std::endl;*/
+				eng_1->verifyOutput();
+				std::cout << "-----------------done" << std::endl;
+			}
+
+			/*auto res = eng_1->prepareInput(batches, image_embeddings);
+			std::cout << "------------------prepareInput: " << res << std::endl;
+			res = eng_1->infer();
+			std::cout << "------------------infer: " << res << std::endl;*/
+			//eng_1->verifyOutput();
+			//std::cout << "-----------------done" << std::endl;
+		}
 	}
 #endif
 }
