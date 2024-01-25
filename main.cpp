@@ -1,7 +1,6 @@
 
 #include "sam.h"
 #include "export.h"
-//#include "baseModel.h"
 ///////////////////////////////////////////////////////////////////////////////
 using namespace std;
 using namespace cv;
@@ -13,75 +12,84 @@ at::Tensor image_embeddings;
 #define EMBEDDING
 #define SAMPROMPTENCODERANDMASKDECODER
 
-//#include <vector>
-//#include <numeric>
-//#include <algorithm>
-//#include <cmath>
-
-std::vector<std::vector<double>> build_point_grid(int n_per_side) {
-	// Generate a 1D array of points for one side
+std::vector<std::vector<double>> build_point_grid(int n_per_side)
+{
+	// Calculate Offset
 	double offset = 1.0 / (2 * n_per_side);
+	// Generate Points Along One Side
 	std::vector<double> points_one_side;
-	for (int i = 0; i < n_per_side; ++i) {
+	for (int i = 0; i < n_per_side; ++i)
+	{
 		points_one_side.push_back(offset + i * (1.0 - 2 * offset) / (n_per_side - 1));
 	}
-
-	// Create a 2D grid of points using the generated array
-	std::vector<std::vector<double>> points(n_per_side, std::vector<double>(n_per_side));
-
-	for (int i = 0; i < n_per_side; ++i) {
-		for (int j = 0; j < n_per_side; ++j) {
-			points[i][j] = points_one_side[j];
+	// Tile Points for X and Y Axes
+	std::vector<std::vector<double>> points_x(n_per_side, std::vector<double>(n_per_side, 0.0));
+	std::vector<std::vector<double>> points_y(n_per_side, std::vector<double>(n_per_side, 0.0));
+	for (int i = 0; i < n_per_side; ++i)
+	{
+		for (int j = 0; j < n_per_side; ++j)
+		{
+			points_x[i][j] = points_one_side[j];
+			points_y[i][j] = points_one_side[i];
 		}
 	}
-
+	// Combine X and Y Coordinates
+	std::vector<std::vector<double>> points;
+	for (int i = 0; i < n_per_side; ++i)
+	{
+		for (int j = 0; j < n_per_side; ++j)
+		{
+			std::vector<double> point = {points_x[i][j], points_y[i][j]};
+			points.push_back(point);
+		}
+	}
 	return points;
 }
 
- //Function to build all layer point grids
 std::vector<std::vector<std::vector<double>>> build_all_layer_point_grids(
-	int n_per_side, int n_layers, int scale_per_layer
-) {
-	// Generates point grids for all crop layers
+	int n_per_side, int n_layers, double scale_per_layer)
+{
 	std::vector<std::vector<std::vector<double>>> points_by_layer;
-
-	for (int i = 0; i <= n_layers; ++i) {
+	for (int i = 0; i <= n_layers; ++i)
+	{
+		// Calculate number of points for each layer
 		int n_points = static_cast<int>(n_per_side / std::pow(scale_per_layer, i));
+		// Build point grid for the current layer
 		points_by_layer.push_back(build_point_grid(n_points));
 	}
-
 	return points_by_layer;
 }
 
-std::vector<std::vector<int>> m_batch_iterator(int batch_size, const std::vector<std::vector<double>>& args) {
-	assert(!args.empty() && std::all_of(args.begin(), args.end(),
-		[&](const std::vector<double>& a) { return a.size() == args[0].size(); }),
-		"Batched iteration must have inputs of all the same size.");
-
-	int n_batches = args[0].size() / batch_size + static_cast<int>(args[0].size() % batch_size != 0);
-	std::cout << "Number of Batches: " << n_batches << std::endl;
-
+std::vector<std::vector<int>> batch_iterator(int batch_size, const std::vector<std::vector<double>> &points)
+{
 	std::vector<std::vector<int>> batches;
-
-	for (int b = 0; b < n_batches; ++b) {
-		std::vector<int> batch_args;
-
-		// Extract batch for each argument
-		for (const auto& arg : args) {
-			auto start = arg.begin() + b * batch_size;
-			auto end = arg.begin() + std::min((b + 1) * batch_size, static_cast<int>(arg.size()));
-
-			// Convert each double element to int and append to batch_args
-			batch_args.insert(batch_args.end(), start, end);
+	int n_batches = points.size() / batch_size + (points.size() % batch_size != 0);
+	std::cout << "Number of Batches: " << n_batches << "\n\n";
+	for (int b = 0; b < n_batches; ++b)
+	{
+		int start_idx = b * batch_size;
+		int end_idx = std::min((b + 1) * batch_size, static_cast<int>(points.size()));
+		// Create a batch by emplacing each point
+		std::vector<int> batch;
+		for (int i = start_idx; i < end_idx; ++i)
+		{
+			batch.emplace_back(static_cast<int>(points[i][0]));
+			batch.emplace_back(static_cast<int>(points[i][1]));
 		}
-
-		batches.push_back(batch_args);
+		// Add the batch to the result without scaling
+		// Print the points in the current batch
+		std::cout << "Batch " << b << ":\n";
+		for (size_t i = 0; i < batch.size(); i += 2)
+		{
+			std::cout << "(" << batch[i] << ", " << batch[i + 1] << ") ";
+		}
+		std::cout << "\n\n";
+		batches.emplace_back(std::move(batch));
 	}
-
 	return batches;
 }
 
-int main(int argc, char const* argv[])
+int main(int argc, char const *argv[])
 {
 	std::cout << "into main" << std::endl;
 
@@ -156,40 +164,50 @@ int main(int argc, char const* argv[])
 		int points_per_batch = 64;
 		int points_per_side = 32;
 		int crop_n_layers = 0;
-		int crop_overlap_ratio = 512 / 1500;
+		double scale_per_layer = 512 / 1500.0;
 
-		std::vector<std::vector<std::vector<double>>>point_grids = build_all_layer_point_grids(points_per_side, crop_n_layers, crop_overlap_ratio);
+		auto all_layer_point_grids = build_all_layer_point_grids(points_per_side, crop_n_layers, scale_per_layer);
 
-		int scale_x = 1800;
-		int scale_y = 1200;
+		// Print the generated point grids for all layers
+		// for (int layer = 0; layer <= n_layers; ++layer) {
+		// std::cout << "Layer " << layer << ":\n";
+		// for (const auto& point : all_layer_point_grids[layer]) {
+		// std::cout << "(" << point[0] << ", " << point[1] << ") ";
+		// }
+		// }
 
-		std::vector<std::vector<double>> points_for_image = point_grids[0];
+		double scale_x = 1800.0;
+		double scale_y = 1200.0;
 
-		//// Scale each point in the grid and store in points_for_image
-		for (auto& row : points_for_image) {
-			for (size_t j = 0; j < row.size(); ++j) {
+		std::vector<std::vector<double>> points_for_image = all_layer_point_grids[0];
+
+		// Scale each point in the grid for the first layer
+		for (auto &row : points_for_image)
+		{
+			for (size_t j = 0; j < row.size(); ++j)
+			{
 				row[j] *= (j == 0) ? scale_x : scale_y;
 			}
+		}
 
-			std::vector<std::vector<int>> batches = m_batch_iterator(points_per_batch, points_for_image);
+		// Print the scaled points for the first layer
+		// std::cout << "Scaled Points for the First Layer:\n";
+		// for (const auto& point : points_for_image) {
+		// std::cout << "(" << point[0] << ", " << point[1] << ") ";
+		//}
 
-			for (const auto& batch : batches) {
-				auto res = eng_1->prepareInput(batch, image_embeddings);
-				std::cout << "------------------prepareInput: " << res << std::endl;
+		auto batches = batch_iterator(points_per_batch, points_for_image);
 
-				res = eng_1->infer();
-				std::cout << "------------------infer: " << res << std::endl;
-
-				eng_1->verifyOutput();
-				std::cout << "-----------------done" << std::endl;
-			}
-
-			/*auto res = eng_1->prepareInput(batches, image_embeddings);
+		for (const auto &batch : batches)
+		{
+			auto res = eng_1->prepareInput(batch, image_embeddings);
 			std::cout << "------------------prepareInput: " << res << std::endl;
+
 			res = eng_1->infer();
-			std::cout << "------------------infer: " << res << std::endl;*/
-			//eng_1->verifyOutput();
-			//std::cout << "-----------------done" << std::endl;
+			std::cout << "------------------infer: " << res << std::endl;
+
+			eng_1->verifyOutput();
+			std::cout << "-----------------done" << std::endl;
 		}
 	}
 #endif
